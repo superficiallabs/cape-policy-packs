@@ -1,0 +1,100 @@
+{
+  "id": "capability.eu-ai-act-article14-human-oversight",
+  "version": "1.0.0",
+  "description": "EU AI Act Article 14 Human Oversight requirements as executable CAPE specifications",
+  "source": "EU AI Act (Regulation (EU) 2024/1689), Article 14",
+  "source_url": "https://artificialintelligenceact.eu/article/14/",
+  
+  "configuration": {
+    "confidence_threshold_low": 0.6,
+    "confidence_threshold_high": 0.9,
+    "escalation_keywords": ["unsure", "uncertain", "recommend human review", "escalate", "beyond my capability"],
+    "high_stakes_indicators": ["final decision", "binding", "irreversible", "legal", "medical", "financial commitment"],
+    "max_certainty_claims_without_source": 2
+  },
+  
+  "scope": {
+    "kind": "text_content",
+    "filter": { "type": "model_output" }
+  },
+  
+  "policies": [
+    {
+      "id": "policy.article14.uncertainty-disclosure",
+      "tier": "T2",
+      "description": "Article 14(4)(b): Model outputs must express appropriate uncertainty to prevent automation bias",
+      "assert": [
+        { "expr": "NOT (high_certainty_language(output) AND low_confidence_topic(output, ctx))", "msg": "High certainty on low-confidence topic; human overseer cannot calibrate reliance" },
+        { "expr": "count(certainty_claims_without_source(output)) <= config.max_certainty_claims_without_source", "msg": "Too many unsourced certainty claims ({count} > {max})" }
+      ],
+      "on_violation": {
+        "action": "CORRECT",
+        "correction_hint": "Add hedging language or confidence indicators. Replace definitive statements with qualified ones where ground truth is unavailable."
+      }
+    },
+    {
+      "id": "policy.article14.escalation-routing",
+      "tier": "T2",
+      "description": "Article 14(4)(d): High-stakes or low-confidence outputs must signal need for human review",
+      "where": [
+        { "expr": "is_recommendation(output) OR is_decision_support(output)" }
+      ],
+      "assert": [
+        { "expr": "NOT (high_stakes_context(output, ctx, config.high_stakes_indicators) AND missing_escalation_signal(output, config.escalation_keywords))", "msg": "High-stakes recommendation without escalation signal" },
+        { "expr": "NOT (confidence_score(output) < config.confidence_threshold_low AND missing_escalation_signal(output, config.escalation_keywords))", "msg": "Low-confidence output without human review flag" }
+      ],
+      "on_violation": {
+        "action": "CORRECT",
+        "correction_hint": "Add explicit signal that human review is recommended. Include phrase like 'I recommend human review' or 'This decision should be verified by a qualified person'."
+      }
+    },
+    {
+      "id": "policy.article14.reasoning-transparency",
+      "tier": "T3",
+      "description": "Article 14(4)(c): Recommendations must include interpretable reasoning for human interpretation",
+      "where": [
+        { "expr": "is_recommendation(output) OR is_assessment(output) OR is_classification(output)" }
+      ],
+      "assert": [
+        { "expr": "has_reasoning_chain(output) OR has_factor_list(output) OR has_evidence_citation(output)", "msg": "Recommendation without interpretable reasoning" },
+        { "expr": "NOT (conclusion_present(output) AND reasoning_absent(output))", "msg": "Conclusion stated without supporting reasoning" }
+      ],
+      "on_violation": {
+        "action": "CORRECT",
+        "correction_hint": "Add reasoning explaining the basis for the recommendation. Include 'because', 'based on', or 'the key factors are' followed by specific justification."
+      }
+    },
+    {
+      "id": "policy.article14.capability-boundaries",
+      "tier": "T2",
+      "description": "Article 14(4)(a): Outputs must acknowledge when requests fall outside reliable capability",
+      "where": [
+        { "expr": "request_type(ctx) IN ['prediction', 'diagnosis', 'legal_advice', 'medical_advice', 'financial_advice']" }
+      ],
+      "assert": [
+        { "expr": "has_limitation_acknowledgment(output) OR has_scope_statement(output)", "msg": "High-risk domain response without limitation acknowledgment" },
+        { "expr": "NOT (out_of_scope_request(ctx) AND confident_response(output))", "msg": "Confident response to out-of-scope request" }
+      ],
+      "on_violation": {
+        "action": "CORRECT",
+        "correction_hint": "Add explicit acknowledgment of limitations. Include 'This is informational only and should not replace professional advice' or 'This falls outside my area of reliable capability'."
+      }
+    },
+    {
+      "id": "policy.article14.anomaly-flagging",
+      "tier": "T2",
+      "description": "Article 14(4)(a): Anomalous inputs must be flagged for human attention",
+      "where": [
+        { "expr": "anomalous_input(ctx) OR edge_case_detected(ctx)" }
+      ],
+      "assert": [
+        { "expr": "has_anomaly_flag(output) OR has_edge_case_warning(output)", "msg": "Anomalous input processed without flag" },
+        { "expr": "NOT (contradictory_context(ctx) AND no_contradiction_flag(output))", "msg": "Contradictory inputs processed without alert" }
+      ],
+      "on_violation": {
+        "action": "CORRECT",
+        "correction_hint": "Flag the anomaly explicitly. Add 'Note: This request contains unusual elements that may require human review' or 'I detected potentially contradictory information'."
+      }
+    }
+  ]
+}
