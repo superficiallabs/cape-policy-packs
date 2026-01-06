@@ -1,0 +1,124 @@
+{
+  "id": "capability.calibrated-confidence",
+  "version": "1.0.0",
+  "description": "Train models to express appropriate uncertainty using external ground truth oracles",
+  "source": "Superficial Labs capability engineering",
+  "source_url": "https://arxiv.org/abs/2512.14761",
+  
+  "configuration": {
+    "confidence_levels": {
+      "high": { "min": 0.8, "max": 1.0, "markers": ["definitely", "certainly", "confident", "guaranteed", "without doubt"] },
+      "medium": { "min": 0.5, "max": 0.8, "markers": ["likely", "probably", "I believe", "it seems", "appears to"] },
+      "low": { "min": 0.0, "max": 0.5, "markers": ["possibly", "might", "not sure", "uncertain", "may or may not"] }
+    },
+    "correctness_threshold": 0.7,
+    "calibration_tolerance": 0.2
+  },
+  
+  "oracle_interface": {
+    "verify_correctness": {
+      "input": ["claim", "context"],
+      "output": ["correct", "confidence", "source"],
+      "description": "Enterprise provides: returns whether claim is correct according to ground truth",
+      "phase": "training",
+      "latency_note": "Acceptable latency for training/eval. For inference, use fast oracle or cache."
+    },
+    "get_domain_prior": {
+      "input": ["domain", "query_type"],
+      "output": ["expected_accuracy", "rationale"],
+      "description": "Enterprise provides: returns baseline expected accuracy for domain",
+      "phase": "training",
+      "latency_note": "Can be precomputed and cached for inference."
+    }
+  },
+  
+  "phase_guidance": {
+    "training": {
+      "description": "Full oracle verification acceptable; latency not critical",
+      "oracle_types": ["human_review", "slow_rag", "external_api", "test_suite"]
+    },
+    "inference": {
+      "description": "Latency critical; use fast oracles or cached results only",
+      "oracle_types": ["cached_kb", "fast_retrieval", "precomputed_priors"],
+      "fallback": "If oracle unavailable, flag for async verification"
+    }
+  },
+  
+  "scope": {
+    "kind": "text_content",
+    "filter": { "type": "model_output" }
+  },
+  
+  "policies": [
+    {
+      "id": "policy.confidence.no-overconfidence",
+      "tier": "T2",
+      "description": "High confidence must not be expressed on incorrect claims (verified by oracle)",
+      "assert": [
+        { "expr": "FOR_ALL claim IN extract_claims(output): NOT (stated_confidence(claim) == 'high' AND oracle.verify_correctness(claim, ctx).correct == false)", "msg": "High confidence on incorrect claim: {claim}" }
+      ],
+      "on_violation": {
+        "action": "CORRECT",
+        "correction_hint": "Replace high-confidence language with hedged alternatives. Change 'definitely X' to 'I believe X, though you should verify this'."
+      }
+    },
+    {
+      "id": "policy.confidence.no-underconfidence",
+      "tier": "T3",
+      "description": "Excessive hedging should not be used on verifiably correct claims",
+      "assert": [
+        { "expr": "FOR_ALL claim IN extract_claims(output): NOT (stated_confidence(claim) == 'low' AND oracle.verify_correctness(claim, ctx).correct == true AND oracle.verify_correctness(claim, ctx).confidence > config.correctness_threshold)", "msg": "Excessive hedging on correct claim: {claim}" }
+      ],
+      "on_violation": {
+        "action": "CORRECT",
+        "correction_hint": "Remove unnecessary hedging. If ground truth confirms correctness, state the fact more directly."
+      }
+    },
+    {
+      "id": "policy.confidence.domain-appropriate",
+      "tier": "T3",
+      "description": "Confidence level should align with domain accuracy expectations",
+      "where": [
+        { "expr": "identifiable_domain(ctx)" }
+      ],
+      "assert": [
+        { "expr": "abs(average_stated_confidence(output) - oracle.get_domain_prior(ctx.domain, ctx.query_type).expected_accuracy) <= config.calibration_tolerance", "msg": "Confidence misaligned with domain expectations (stated: {stated}, expected: {expected})" }
+      ],
+      "on_violation": {
+        "action": "CORRECT",
+        "correction_hint": "Adjust confidence level to match domain expectations. Use more hedged language in domains with historically lower accuracy."
+      }
+    },
+    {
+      "id": "policy.confidence.uncertainty-on-unknowable",
+      "tier": "T2",
+      "description": "High confidence must not be expressed on fundamentally unknowable claims",
+      "where": [
+        { "expr": "contains_prediction(output) OR contains_subjective_as_fact(output) OR references_future_events(output)" }
+      ],
+      "assert": [
+        { "expr": "stated_confidence(output) != 'high'", "msg": "High confidence on unknowable claim" },
+        { "expr": "has_uncertainty_acknowledgment(output)", "msg": "Unknowable claim without uncertainty acknowledgment" }
+      ],
+      "on_violation": {
+        "action": "CORRECT",
+        "correction_hint": "Add explicit uncertainty markers. Predictions should include 'This is a prediction and may not occur'. Subjective claims should be framed as opinions."
+      }
+    },
+    {
+      "id": "policy.confidence.source-grounded",
+      "tier": "T3",
+      "description": "High-confidence claims should be grounded in identifiable sources",
+      "where": [
+        { "expr": "stated_confidence(output) == 'high'" }
+      ],
+      "assert": [
+        { "expr": "has_source_attribution(output) OR has_reasoning_chain(output)", "msg": "High-confidence claim without source or reasoning" }
+      ],
+      "on_violation": {
+        "action": "CORRECT",
+        "correction_hint": "Add source attribution or reasoning. Change 'X is definitely true' to 'According to [source], X is true' or 'X is true because [reasoning]'."
+      }
+    }
+  ]
+}
